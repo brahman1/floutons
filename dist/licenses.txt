@@ -1,0 +1,24 @@
+Floutons — traitement local des vidéos.
+
+Détection : CenterFace, Star-Clouds, licence MIT.
+Moteur local : ONNX Runtime Web 1.20.1, Microsoft, licence MIT.
+Le modèle CenterFace provient de ORB-HD/deface. Ses dimensions d'entrée
+et de sortie ont été adaptées pour accepter des images de tailles variables.
+https://github.com/Star-Clouds/CenterFace
+https://github.com/ORB-HD/deface
+https://github.com/microsoft/onnxruntime
+Licences : assets/centerface-LICENSE et assets/onnxruntime-LICENSE.
+
+Durée des exports WebM : fix-webm-duration 1.0.6, licence MIT.
+https://github.com/yusitnikov/fix-webm-duration
+Texte de la licence : assets/fix-webm-duration-LICENSE.
+
+Cette version utilise CenterFace, le détecteur utilisé par Deface,
+avec une implémentation adaptée au navigateur.
+Les fichiers du moteur et du modèle sont servis par ce site ; les vidéos
+ne sont jamais envoyées. Aucun système d'analyse d'audience n'est intégré.
+Le navigateur réencode les images masquées à la résolution choisie.
+Le son est retiré par défaut ou conservé selon le choix de l’utilisateur.
+
+Mediabunny 1.61.0 — MPL-2.0 — https://mediabunny.dev
+Licence : /assets/mediabunny-LICENSE.txt
