@@ -58,6 +58,13 @@ function paintFrame(result,snapshotTime){
  const tracked=tracker.update(boxes,gray,grayCanvas.width,grayCanvas.height,snapshotTime),held=tracked.filter(t=>t.held).length;
  for(const b of tracked){const margin=.25+(b.held?b.gap*.35:0);region({x:(b.x-b.w*margin)*canvas.width,y:(b.y-b.h*(margin+.05))*canvas.height,w:b.w*(1+2*margin)*canvas.width,h:b.h*(1.1+2*margin)*canvas.height},mode);}
  for(const m of masks){const r=manualAt(m,snapshotTime);if(r)region({x:r.x*canvas.width,y:r.y*canvas.height,w:r.w*canvas.width,h:r.h*canvas.height},mode);}
+ // Small proportional signature, visible in both the preview and every exported frame.
+ ctx.save();
+ const watermarkSize=Math.min(canvas.width*.032,Math.min(canvas.width,canvas.height)*.024),watermarkMargin=Math.min(canvas.width,canvas.height)*.018;
+ ctx.font=`500 ${watermarkSize}px Arial, sans-serif`;ctx.textAlign='right';ctx.textBaseline='bottom';
+ ctx.globalAlpha=.7;ctx.lineWidth=watermarkSize*.15;ctx.lineJoin='round';ctx.strokeStyle='rgba(0,0,0,.65)';ctx.fillStyle='#fff';
+ ctx.strokeText('floutons.com',canvas.width-watermarkMargin,canvas.height-watermarkMargin);
+ ctx.fillText('floutons.com',canvas.width-watermarkMargin,canvas.height-watermarkMargin);ctx.restore();
  if(draft){ctx.save();ctx.strokeStyle='#d7f67c';ctx.lineWidth=3;ctx.strokeRect(draft.x*canvas.width,draft.y*canvas.height,draft.w*canvas.width,draft.h*canvas.height);ctx.restore();}
  $('facecount').textContent=`${result.detections.length} visage${result.detections.length>1?'s':''} détecté${result.detections.length>1?'s':''} · ${masks.length} zone${masks.length>1?'s':''} manuelle${masks.length>1?'s':''} · ${held} masque${held>1?'s':''} maintenu${held>1?'s':''}`;
  $('seek').value=snapshotTime;$('time').textContent=`${clock(snapshotTime)} / ${clock(video.duration)}`;
