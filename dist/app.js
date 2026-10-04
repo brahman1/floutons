@@ -1,6 +1,7 @@
 import { CenterFaceDetector } from './detector.js';
 import { FaceTracker, manualAt, putKey } from './tracker.js';
 import { ExportActivity } from './export-activity.js?v=20261004-wake-eta';
+import { gaussianBlurPixels } from './pixel-blur.js?v=20261004-pixel-blur';
 import {Input, Output, Mp4OutputFormat, WebMOutputFormat, BufferTarget, Conversion, ALL_FORMATS, BlobSource} from './assets/mediabunny.mjs';
 const $=id=>document.getElementById(id);
 const video=$('source'),canvas=$('canvas'),ctx=canvas.getContext('2d'),scratch=document.createElement('canvas'),sc=scratch.getContext('2d');
@@ -8,6 +9,7 @@ let detector,modelPromise,fileURL,outputURL,fileName='video',masks=[],drawing=fa
 let exportInput=null,exportBlob=null;
 const mobileDevice=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const supportsCanvasBlur='filter' in ctx;
+const blurPatch=document.createElement('canvas'),blurContext=blurPatch.getContext('2d',{willReadFrequently:true});
 let previewReleased=false,previewResumeTime=0,sourceDuration=0;
 const exportActivity=new ExportActivity($('processing-details'));
 if(mobileDevice)$('resolution').value='1920';
@@ -67,11 +69,30 @@ async function cleanupExport(){
 }
 function region(r,mode){
  const x=Math.max(0,Math.floor(r.x)),y=Math.max(0,Math.floor(r.y)),w=Math.min(canvas.width-x,Math.ceil(r.w)),h=Math.min(canvas.height-y,Math.ceil(r.h));if(w<=0||h<=0)return;
- // Safari versions without canvas filters must never export an unmasked face.
- if(mode==='solid'||!supportsCanvasBlur){ctx.fillStyle='#101915';ctx.fillRect(x,y,w,h);return;}
+ if(mode==='solid'){ctx.fillStyle='#101915';ctx.fillRect(x,y,w,h);return;}
+ if(!supportsCanvasBlur){pixelBlurRegion(x,y,w,h);return;}
  // Replicate the patch edges before blurring so original facial edges cannot bleed in.
  scratch.width=w+80;scratch.height=h+80;const rx=frame.width/canvas.width,ry=frame.height/canvas.height;sc.drawImage(frame,x*rx,y*ry,w*rx,h*ry,40,40,w,h);sc.drawImage(scratch,40,40,1,h,0,40,40,h);sc.drawImage(scratch,w+39,40,1,h,w+40,40,40,h);sc.drawImage(scratch,0,40,w+80,1,0,0,w+80,40);sc.drawImage(scratch,0,h+39,w+80,1,0,h+40,w+80,40);
- ctx.save();ctx.beginPath();ctx.rect(x,y,w,h);ctx.clip();ctx.filter=`blur(${Math.max(12,w*.18)}px)`;ctx.drawImage(scratch,x-40,y-40);ctx.restore();
+ ctx.save();
+ try{ctx.beginPath();ctx.rect(x,y,w,h);ctx.clip();ctx.filter=`blur(${Math.max(12,w*.18)}px)`;ctx.drawImage(scratch,x-40,y-40);}
+ catch{ctx.restore();pixelBlurRegion(x,y,w,h);return;}
+ ctx.restore();
+}
+function pixelBlurRegion(x,y,w,h){
+ try{
+  const scale=Math.min(1,256/Math.max(w,h));
+  blurPatch.width=Math.max(1,Math.round(w*scale));blurPatch.height=Math.max(1,Math.round(h*scale));
+  const rx=frame.width/canvas.width,ry=frame.height/canvas.height;
+  blurContext.drawImage(frame,x*rx,y*ry,w*rx,h*ry,0,0,blurPatch.width,blurPatch.height);
+  const patch=blurContext.getImageData(0,0,blurPatch.width,blurPatch.height);
+  gaussianBlurPixels(patch.data,patch.width,patch.height,Math.max(12,w*.18)*scale);
+  blurContext.putImageData(patch,0,0);
+  ctx.drawImage(blurPatch,x,y,w,h);
+ }catch{
+  // A failed fallback must still protect the face, and must be visible to the user.
+  ctx.fillStyle='#101915';ctx.fillRect(x,y,w,h);
+  const warning=$('blur-warning');warning.hidden=false;warning.textContent='Le calcul du flou a échoué sur certaines zones. Un masque opaque les protège à la place. Vérifiez la vidéo avant de la partager.';
+ }
 }
 function render(){
  renderAgain=true;
@@ -117,6 +138,7 @@ video.addEventListener('loadedmetadata',()=>{if(Number.isFinite(video.duration))
 function once(target,event,timeout=15000){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>finish(new Error('Délai dépassé')),timeout);const ok=()=>finish();const fail=()=>finish(new Error('Format vidéo non pris en charge'));function finish(error){clearTimeout(timer);target.removeEventListener(event,ok);target.removeEventListener('error',fail);error?reject(error):resolve();}target.addEventListener(event,ok,{once:true});target.addEventListener('error',fail,{once:true});});}
 async function openFile(file){
  if(!file||busy)return;if(file.size>200*1024*1024){message('Cette version accepte des fichiers de 200 Mo maximum.',true);return;}
+ $('blur-warning').hidden=true;
  video.pause();invalidate();drawing=false;canvas.classList.remove('drawing');$('addmask').textContent='Ajouter une zone à masquer';masks=[];maskHistory=[];syncMaskList();tracker.reset();
  if(fileURL)URL.revokeObjectURL(fileURL);fileURL=URL.createObjectURL(file);sourceFile=file;fileName=file.name.replace(/\.[^.]+$/,'');$('filename').textContent=file.name;$('stage').hidden=true;$('dropzone').hidden=false;message('Ouverture de la vidéo…');$('export').disabled=true;
  try{const metadata=once(video,'loadedmetadata');video.src=fileURL;video.load();await metadata;if(!Number.isFinite(video.duration)||video.duration<=0||video.duration>180)throw new Error('Choisissez une vidéo de 3 minutes maximum.');if(video.readyState<2)await once(video,'loadeddata');$('seek').max=video.duration;resizeCanvas();await loadModel();$('dropzone').hidden=true;$('stage').hidden=false;await render();message('Vidéo prête. Relisez l’aperçu et ajoutez des zones si nécessaire.');controls();}
@@ -127,7 +149,7 @@ const dz=$('dropzone');['dragenter','dragover'].forEach(type=>dz.addEventListene
 $('play').onclick=async()=>{if(video.paused){try{await video.play();}catch{message('La lecture n’a pas démarré. Réessayez.',true);}}else video.pause();};
 $('seek').oninput=()=>{video.pause();video.currentTime=Number($('seek').value);};
 $('sensitivity').onchange=async()=>{video.pause();tracker.reset();invalidate();$('sensitivity-value').textContent=Number($('sensitivity').value)<=35?'Élevée':'Modérée';if(detector){await detector.setOptions({minDetectionConfidence:Number($('sensitivity').value)/100});safeRender();}};
-document.querySelectorAll('[name=mode]').forEach(el=>el.onchange=()=>{invalidate();safeRender();if(el.value==='blur'&&!supportsCanvasBlur)message('Ce navigateur ne prend pas en charge le flou : un masque opaque protège les visages à la place.');});
+document.querySelectorAll('[name=mode]').forEach(el=>el.onchange=()=>{invalidate();$('blur-warning').hidden=true;safeRender();if(el.value==='blur'&&!supportsCanvasBlur)message('Le flou est calculé directement sur les pixels pour ce navigateur.');});
 $('resolution').onchange=()=>{video.pause();invalidate();if(fileURL&&video.videoWidth){resizeCanvas();safeRender();}};
 $('keep-audio').onchange=()=>invalidate();
 $('addmask').onclick=()=>{video.pause();drawing=!drawing;canvas.classList.toggle('drawing',drawing);$('addmask').textContent=drawing?'Terminer l’ajout de zones':'Ajouter une zone à masquer';message(drawing?'Tracez une zone. Pour la déplacer ensuite, changez la position dans la vidéo puis retracez cette même zone.':'Relisez l’aperçu avant de créer la vidéo.');};
