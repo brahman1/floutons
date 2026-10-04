@@ -61,10 +61,10 @@ function paintFrame(result,snapshotTime){
  // Small proportional signature, visible in both the preview and every exported frame.
  ctx.save();
  const watermarkSize=Math.min(canvas.width*.032,Math.min(canvas.width,canvas.height)*.024),watermarkMargin=Math.min(canvas.width,canvas.height)*.018;
- ctx.font=`500 ${watermarkSize}px Arial, sans-serif`;ctx.textAlign='right';ctx.textBaseline='bottom';
+ ctx.font=`500 ${watermarkSize}px Arial, sans-serif`;ctx.textAlign='right';ctx.textBaseline='top';
  ctx.globalAlpha=.7;ctx.lineWidth=watermarkSize*.15;ctx.lineJoin='round';ctx.strokeStyle='rgba(0,0,0,.65)';ctx.fillStyle='#fff';
- ctx.strokeText('floutons.com',canvas.width-watermarkMargin,canvas.height-watermarkMargin);
- ctx.fillText('floutons.com',canvas.width-watermarkMargin,canvas.height-watermarkMargin);ctx.restore();
+ ctx.strokeText('floutons.com',canvas.width-watermarkMargin,watermarkMargin);
+ ctx.fillText('floutons.com',canvas.width-watermarkMargin,watermarkMargin);ctx.restore();
  if(draft){ctx.save();ctx.strokeStyle='#d7f67c';ctx.lineWidth=3;ctx.strokeRect(draft.x*canvas.width,draft.y*canvas.height,draft.w*canvas.width,draft.h*canvas.height);ctx.restore();}
  $('facecount').textContent=`${result.detections.length} visage${result.detections.length>1?'s':''} détecté${result.detections.length>1?'s':''} · ${masks.length} zone${masks.length>1?'s':''} manuelle${masks.length>1?'s':''} · ${held} masque${held>1?'s':''} maintenu${held>1?'s':''}`;
  $('seek').value=snapshotTime;$('time').textContent=`${clock(snapshotTime)} / ${clock(video.duration)}`;
