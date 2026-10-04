@@ -5,6 +5,10 @@ const $=id=>document.getElementById(id);
 const video=$('source'),canvas=$('canvas'),ctx=canvas.getContext('2d'),scratch=document.createElement('canvas'),sc=scratch.getContext('2d');
 let detector,modelPromise,fileURL,outputURL,fileName='video',masks=[],drawing=false,start=null,draft=null,busy=false,conversion=null,sourceFile=null,aborted=false,lastTime=-1,loopToken=0;
 let exportInput=null,exportBlob=null;
+const mobileDevice=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+const supportsCanvasBlur='filter' in ctx;
+let previewReleased=false,previewResumeTime=0;
+if(mobileDevice)$('resolution').value='1920';
 let completionAudio=null;
 function prepareCompletionSound(){
  try{
@@ -47,13 +51,21 @@ function controls(){for(const id of ['play','seek','sensitivity','addmask','repl
 function resizeCanvas(){
  const limit=Number($('resolution').value),longEdge=Math.max(video.videoWidth,video.videoHeight);
  const scale=limit?Math.min(1,limit/longEdge):1;
- canvas.width=Math.max(2,Math.round(video.videoWidth*scale));canvas.height=Math.max(2,Math.round(video.videoHeight*scale));
+ canvas.width=Math.max(2,Math.round(video.videoWidth*scale/2)*2);canvas.height=Math.max(2,Math.round(video.videoHeight*scale/2)*2);
  $('resolution-info').textContent=`${canvas.width} × ${canvas.height} pixels · aucun agrandissement de la source`;
 }
-function cleanupExport(){exportInput?.dispose();exportInput=null;conversion=null;video.pause();busy=false;controls();$('progress').hidden=true;}
+async function cleanupExport(){
+ exportInput?.dispose();exportInput=null;conversion=null;video.pause();
+ if(previewReleased&&fileURL){
+  previewReleased=false;
+  try{const ready=once(video,'loadedmetadata');video.src=fileURL;video.load();await ready;video.currentTime=Math.min(previewResumeTime,video.duration);}catch{}
+ }
+ busy=false;controls();$('progress').hidden=true;
+}
 function region(r,mode){
  const x=Math.max(0,Math.floor(r.x)),y=Math.max(0,Math.floor(r.y)),w=Math.min(canvas.width-x,Math.ceil(r.w)),h=Math.min(canvas.height-y,Math.ceil(r.h));if(w<=0||h<=0)return;
- if(mode==='solid'){ctx.fillStyle='#101915';ctx.fillRect(x,y,w,h);return;}
+ // Safari versions without canvas filters must never export an unmasked face.
+ if(mode==='solid'||!supportsCanvasBlur){ctx.fillStyle='#101915';ctx.fillRect(x,y,w,h);return;}
  // Replicate the patch edges before blurring so original facial edges cannot bleed in.
  scratch.width=w+80;scratch.height=h+80;const rx=frame.width/canvas.width,ry=frame.height/canvas.height;sc.drawImage(frame,x*rx,y*ry,w*rx,h*ry,40,40,w,h);sc.drawImage(scratch,40,40,1,h,0,40,40,h);sc.drawImage(scratch,w+39,40,1,h,w+40,40,40,h);sc.drawImage(scratch,0,40,w+80,1,0,0,w+80,40);sc.drawImage(scratch,0,h+39,w+80,1,0,h+40,w+80,40);
  ctx.save();ctx.beginPath();ctx.rect(x,y,w,h);ctx.clip();ctx.filter=`blur(${Math.max(12,w*.18)}px)`;ctx.drawImage(scratch,x-40,y-40);ctx.restore();
@@ -111,7 +123,7 @@ const dz=$('dropzone');['dragenter','dragover'].forEach(type=>dz.addEventListene
 $('play').onclick=async()=>{if(video.paused){try{await video.play();}catch{message('La lecture n’a pas démarré. Réessayez.',true);}}else video.pause();};
 $('seek').oninput=()=>{video.pause();video.currentTime=Number($('seek').value);};
 $('sensitivity').onchange=async()=>{video.pause();tracker.reset();invalidate();$('sensitivity-value').textContent=Number($('sensitivity').value)<=35?'Élevée':'Modérée';if(detector){await detector.setOptions({minDetectionConfidence:Number($('sensitivity').value)/100});safeRender();}};
-document.querySelectorAll('[name=mode]').forEach(el=>el.onchange=()=>{invalidate();safeRender();});
+document.querySelectorAll('[name=mode]').forEach(el=>el.onchange=()=>{invalidate();safeRender();if(el.value==='blur'&&!supportsCanvasBlur)message('Ce navigateur ne prend pas en charge le flou : un masque opaque protège les visages à la place.');});
 $('resolution').onchange=()=>{video.pause();invalidate();if(fileURL&&video.videoWidth){resizeCanvas();safeRender();}};
 $('keep-audio').onchange=()=>invalidate();
 $('addmask').onclick=()=>{video.pause();drawing=!drawing;canvas.classList.toggle('drawing',drawing);$('addmask').textContent=drawing?'Terminer l’ajout de zones':'Ajouter une zone à masquer';message(drawing?'Tracez une zone. Pour la déplacer ensuite, changez la position dans la vidéo puis retracez cette même zone.':'Relisez l’aperçu avant de créer la vidéo.');};
@@ -128,6 +140,8 @@ $('export').onclick=async()=>{
  video.pause();invalidate();drawing=false;start=null;draft=null;canvas.classList.remove('drawing');$('addmask').textContent='Ajouter une zone à masquer';busy=true;aborted=false;controls();$('progress').hidden=false;$('progress').value=0;
  try{
   await renderTask;tracker.reset();resizeCanvas();
+  // Release the preview decoder before opening the export decoder (limited on iOS).
+  previewResumeTime=video.currentTime;previewReleased=true;video.removeAttribute('src');video.load();
   exportInput=new Input({formats:ALL_FORMATS,source:new BlobSource(sourceFile)});
   let output,mime,extension;
   for(const format of [new Mp4OutputFormat(),new WebMOutputFormat()]){
@@ -154,8 +168,12 @@ $('export').onclick=async()=>{
   const blob=new Blob([output.target.buffer],{type:mime});if(!blob.size)throw new Error('Le fichier créé est vide.');
   exportBlob=blob;outputURL=URL.createObjectURL(blob);$('open-output').href=outputURL;$('output').src=outputURL;$('download').href=outputURL;$('download').download=`${fileName}-masquee.${extension}`;
   $('result').hidden=false;message(`Vidéo créée ${keepAudio?'avec le son':'sans son'}, à la cadence d’origine. Vérifiez le résultat avant de télécharger.`);playCompletionSound();$('result').scrollIntoView({behavior:'smooth',block:'start'});
- }catch(e){message(aborted?'Traitement interrompu. Vous pouvez recommencer.':`L’export a échoué. ${e.message}`,!aborted);}
- finally{cleanupExport();}
+ }catch(e){
+  if(conversion)await conversion.cancel().catch(()=>{});
+  const decoding=/decoder|decode|decoding|codec/i.test(e.message||'');
+  message(aborted?'Traitement interrompu. Vous pouvez recommencer.':decoding?'Le navigateur n’a pas pu décoder cette vidéo. Sur iPhone, gardez Safari au premier plan et réessayez. Si l’erreur revient, utilisez une copie MP4 encodée en H.264 ; le format HEVC/HDR de certaines vidéos peut ne pas être pris en charge.':`L’export a échoué. ${e.message}`,!aborted);
+ }
+ finally{await cleanupExport();}
 };
 $('cancel').onclick=()=>{aborted=true;conversion?.cancel().catch(()=>{});};
 $('reviewed').onchange=()=>{const enabled=$('reviewed').checked;$('download').classList.toggle('disabled',!enabled);$('download').setAttribute('aria-disabled',String(!enabled));};$('download').onclick=async e=>{
