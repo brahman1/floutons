@@ -5,6 +5,29 @@ const $=id=>document.getElementById(id);
 const video=$('source'),canvas=$('canvas'),ctx=canvas.getContext('2d'),scratch=document.createElement('canvas'),sc=scratch.getContext('2d');
 let detector,modelPromise,fileURL,outputURL,fileName='video',masks=[],drawing=false,start=null,draft=null,busy=false,conversion=null,sourceFile=null,aborted=false,lastTime=-1,loopToken=0;
 let exportInput=null,exportBlob=null;
+let completionAudio=null;
+function prepareCompletionSound(){
+ try{
+  const Audio=window.AudioContext||window.webkitAudioContext;
+  if(!Audio)return;
+  if(!completionAudio||completionAudio.state==='closed')completionAudio=new Audio();
+  // Unlock playback during the export button gesture, before processing starts.
+  completionAudio.resume().catch(()=>{});
+ }catch{}
+}
+function playCompletionSound(){
+ try{
+  if(!completionAudio||completionAudio.state!=='running')return;
+  const now=completionAudio.currentTime;
+  [660,880].forEach((frequency,index)=>{
+   const tone=completionAudio.createOscillator(),volume=completionAudio.createGain(),start=now+index*.18;
+   tone.type='sine';tone.frequency.value=frequency;
+   volume.gain.setValueAtTime(0,start);volume.gain.linearRampToValueAtTime(.08,start+.015);volume.gain.exponentialRampToValueAtTime(.001,start+.22);
+   tone.connect(volume);volume.connect(completionAudio.destination);tone.start(start);tone.stop(start+.24);
+   tone.onended=()=>{tone.disconnect();volume.disconnect();};
+  });
+ }catch{}
+}
 const frame=document.createElement('canvas'),frameContext=frame.getContext('2d');
 let renderTask=null,renderAgain=false;
 const tracker=new FaceTracker(),grayCanvas=document.createElement('canvas'),grayContext=grayCanvas.getContext('2d',{willReadFrequently:true});
@@ -100,6 +123,7 @@ $('undo').onclick=()=>{masks=maskHistory.pop()||[];syncMaskList();invalidate();s
 $('export').onclick=async()=>{
  if(busy)return;
  if(!window.VideoEncoder||!window.VideoDecoder){message('L’export nécessite Chrome ou Edge récent.',true);return;}
+ prepareCompletionSound();
  const keepAudio=$('keep-audio').checked;
  video.pause();invalidate();drawing=false;start=null;draft=null;canvas.classList.remove('drawing');$('addmask').textContent='Ajouter une zone à masquer';busy=true;aborted=false;controls();$('progress').hidden=false;$('progress').value=0;
  try{
@@ -129,7 +153,7 @@ $('export').onclick=async()=>{
   if(aborted)throw new Error('cancelled');
   const blob=new Blob([output.target.buffer],{type:mime});if(!blob.size)throw new Error('Le fichier créé est vide.');
   exportBlob=blob;outputURL=URL.createObjectURL(blob);$('open-output').href=outputURL;$('output').src=outputURL;$('download').href=outputURL;$('download').download=`${fileName}-masquee.${extension}`;
-  $('result').hidden=false;message(`Vidéo créée ${keepAudio?'avec le son':'sans son'}, à la cadence d’origine. Vérifiez le résultat avant de télécharger.`);$('result').scrollIntoView({behavior:'smooth',block:'start'});
+  $('result').hidden=false;message(`Vidéo créée ${keepAudio?'avec le son':'sans son'}, à la cadence d’origine. Vérifiez le résultat avant de télécharger.`);playCompletionSound();$('result').scrollIntoView({behavior:'smooth',block:'start'});
  }catch(e){message(aborted?'Traitement interrompu. Vous pouvez recommencer.':`L’export a échoué. ${e.message}`,!aborted);}
  finally{cleanupExport();}
 };
