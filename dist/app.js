@@ -1,5 +1,6 @@
 import { CenterFaceDetector } from './detector.js';
 import { FaceTracker, manualAt, putKey } from './tracker.js';
+import { ExportActivity } from './export-activity.js?v=20261004-wake-eta';
 import {Input, Output, Mp4OutputFormat, WebMOutputFormat, BufferTarget, Conversion, ALL_FORMATS, BlobSource} from './assets/mediabunny.mjs';
 const $=id=>document.getElementById(id);
 const video=$('source'),canvas=$('canvas'),ctx=canvas.getContext('2d'),scratch=document.createElement('canvas'),sc=scratch.getContext('2d');
@@ -7,7 +8,8 @@ let detector,modelPromise,fileURL,outputURL,fileName='video',masks=[],drawing=fa
 let exportInput=null,exportBlob=null;
 const mobileDevice=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const supportsCanvasBlur='filter' in ctx;
-let previewReleased=false,previewResumeTime=0;
+let previewReleased=false,previewResumeTime=0,sourceDuration=0;
+const exportActivity=new ExportActivity($('processing-details'));
 if(mobileDevice)$('resolution').value='1920';
 let completionAudio=null;
 function prepareCompletionSound(){
@@ -39,7 +41,7 @@ let maskHistory=[];
 function syncMaskList(){const selected=$('mask-select').value;$('mask-select').replaceChildren(new Option('Nouvelle zone',''));masks.forEach((m,i)=>$('mask-select').add(new Option(`Zone ${i+1} · ${m.keys.length} position${m.keys.length>1?'s':''}`,String(i))));$('mask-select').value=selected;}
 
 const message=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
-const clock=t=>`${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`;
+const clock=t=>Number.isFinite(t)?`${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`:'—:—';
 const chosenMode=()=>document.querySelector('[name=mode]:checked').value;
 function invalidate(){exportBlob=null;if(outputURL){URL.revokeObjectURL(outputURL);outputURL=null;}$('output').removeAttribute('src');$('result').hidden=true;$('reviewed').checked=false;$('download').removeAttribute('href');$('open-output').removeAttribute('href');}
 async function loadModel(){
@@ -55,6 +57,7 @@ function resizeCanvas(){
  $('resolution-info').textContent=`${canvas.width} × ${canvas.height} pixels · aucun agrandissement de la source`;
 }
 async function cleanupExport(){
+ await exportActivity.finish();
  exportInput?.dispose();exportInput=null;conversion=null;video.pause();
  if(previewReleased&&fileURL){
   previewReleased=false;
@@ -102,7 +105,7 @@ function paintFrame(result,snapshotTime){
  ctx.fillText('floutons.com',canvas.width-watermarkMargin,watermarkMargin);ctx.restore();
  if(draft){ctx.save();ctx.strokeStyle='#d7f67c';ctx.lineWidth=3;ctx.strokeRect(draft.x*canvas.width,draft.y*canvas.height,draft.w*canvas.width,draft.h*canvas.height);ctx.restore();}
  $('facecount').textContent=`${result.detections.length} visage${result.detections.length>1?'s':''} détecté${result.detections.length>1?'s':''} · ${masks.length} zone${masks.length>1?'s':''} manuelle${masks.length>1?'s':''} · ${held} masque${held>1?'s':''} maintenu${held>1?'s':''}`;
- $('seek').value=snapshotTime;$('time').textContent=`${clock(snapshotTime)} / ${clock(video.duration)}`;
+ $('seek').value=snapshotTime;$('time').textContent=`${clock(snapshotTime)} / ${clock(sourceDuration)}`;
 }
 async function safeRender(){try{await render();return true;}catch(e){video.pause();message('La détection a échoué. Aucun export valide n’a été conservé. Rechargez la vidéo pour réessayer.',true);if(busy){aborted=true;conversion?.cancel().catch(()=>{});}return false;}}
 async function playbackLoop(token){if(token!==loopToken||video.paused||video.ended)return;if(video.currentTime!==lastTime){lastTime=video.currentTime;if(!await safeRender())return;}if(token!==loopToken||video.paused||video.ended)return;if(video.requestVideoFrameCallback)video.requestVideoFrameCallback(()=>playbackLoop(token));else requestAnimationFrame(()=>playbackLoop(token));}
@@ -110,6 +113,7 @@ video.addEventListener('play',()=>{lastTime=-1;$('play').textContent='Pause';pla
 video.addEventListener('pause',()=>{$('play').textContent='Lire';loopToken++;});
 video.addEventListener('seeked',()=>{lastTime=-1;safeRender();});
 video.addEventListener('ended',()=>safeRender());
+video.addEventListener('loadedmetadata',()=>{if(Number.isFinite(video.duration))sourceDuration=video.duration;});
 function once(target,event,timeout=15000){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>finish(new Error('Délai dépassé')),timeout);const ok=()=>finish();const fail=()=>finish(new Error('Format vidéo non pris en charge'));function finish(error){clearTimeout(timer);target.removeEventListener(event,ok);target.removeEventListener('error',fail);error?reject(error):resolve();}target.addEventListener(event,ok,{once:true});target.addEventListener('error',fail,{once:true});});}
 async function openFile(file){
  if(!file||busy)return;if(file.size>200*1024*1024){message('Cette version accepte des fichiers de 200 Mo maximum.',true);return;}
@@ -139,9 +143,10 @@ $('export').onclick=async()=>{
  const keepAudio=$('keep-audio').checked;
  video.pause();invalidate();drawing=false;start=null;draft=null;canvas.classList.remove('drawing');$('addmask').textContent='Ajouter une zone à masquer';busy=true;aborted=false;controls();$('progress').hidden=false;$('progress').value=0;
  try{
+  exportActivity.start();
   await renderTask;tracker.reset();resizeCanvas();
   // Release the preview decoder before opening the export decoder (limited on iOS).
-  previewResumeTime=video.currentTime;previewReleased=true;video.removeAttribute('src');video.load();
+  previewResumeTime=video.currentTime;sourceDuration=video.duration;previewReleased=true;video.removeAttribute('src');video.load();
   exportInput=new Input({formats:ALL_FORMATS,source:new BlobSource(sourceFile)});
   let output,mime,extension;
   for(const format of [new Mp4OutputFormat(),new WebMOutputFormat()]){
@@ -161,8 +166,9 @@ $('export').onclick=async()=>{
   }
   if(aborted)throw new Error('cancelled');
   if(!conversion)throw new Error('Ce navigateur ne peut pas encoder cette vidéo avec les options choisies. Essayez Chrome ou Edge récent.');
-  conversion.onProgress=p=>{$('progress').value=p;message(`Traitement des images : ${Math.round(p*100)} % · la cadence d’origine sera conservée.`);};
+  conversion.onProgress=p=>{$('progress').value=p;exportActivity.update(p);message(`Traitement des images : ${Math.round(p*100)} % · la cadence d’origine sera conservée.`);};
   message('Traitement de toutes les images avant reconstruction de la vidéo…');
+  exportActivity.beginProcessing();
   await conversion.execute();
   if(aborted)throw new Error('cancelled');
   const blob=new Blob([output.target.buffer],{type:mime});if(!blob.size)throw new Error('Le fichier créé est vide.');
@@ -175,7 +181,7 @@ $('export').onclick=async()=>{
  }
  finally{await cleanupExport();}
 };
-$('cancel').onclick=()=>{aborted=true;conversion?.cancel().catch(()=>{});};
+$('cancel').onclick=()=>{aborted=true;exportActivity.finish();conversion?.cancel().catch(()=>{});};
 $('reviewed').onchange=()=>{const enabled=$('reviewed').checked;$('download').classList.toggle('disabled',!enabled);$('download').setAttribute('aria-disabled',String(!enabled));};$('download').onclick=async e=>{
  if(!$('reviewed').checked){e.preventDefault();message('Cochez « J’ai vérifié la vidéo » pour activer le téléchargement.');return;}
  if(!exportBlob){e.preventDefault();message('Créez d’abord la vidéo masquée.',true);return;}
