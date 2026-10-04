@@ -16,7 +16,7 @@ Texte de la licence : assets/fix-webm-duration-LICENSE.
 Cette version utilise CenterFace, le détecteur utilisé par Deface,
 avec une implémentation adaptée au navigateur.
 Les fichiers du moteur et du modèle sont servis par ce site ; les vidéos
-ne sont jamais envoyées. Aucun système d'analyse d'audience n'est intégré.
+ne sont jamais envoyées. Cloudflare Web Analytics mesure les visites, les pages vues et les performances du site. Cette mesure n'envoie pas vos fichiers vidéo à Cloudflare.
 Le navigateur réencode les images masquées à la résolution choisie.
 Le son est retiré par défaut ou conservé selon le choix de l’utilisateur.
 
